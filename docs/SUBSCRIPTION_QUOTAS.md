@@ -17,7 +17,7 @@
 
 卡片的空态文案只复述数据源真正报告过的内容：刷新在途 →「正在读取订阅配额…」；Codex 实时用量接口的 `allowed:false` / `limit_reached:true` →「本期订阅配额已用满 · 等待额度重置」；同一接口应答但没有生效窗口 →「当前没有生效的额度窗口」；OpenCode Go 用量接口对没有 Go 订阅的 Key 返回 403 →「未订阅 OpenCode Go」；Claude Code 应答 `rate_limits_available:false`（API Key / Bedrock / Vertex 登录，配额窗口本就不适用）→「当前登录方式不含订阅额度（API Key / Bedrock / Vertex）」；本机检测到产品但尚无数据 →「暂未读取到订阅配额数据」；本机未安装/未登录 →「未检测到本机安装或登录」。`limit_reached` 与 `allowed` 都缺失时 `empty_reason` 保持 `None`（`RateLimitEmptyReason`）；CLI 桥只在 CLI 报告 `emptyReason` 时透传该字段（缺失/`null` 是当前快照的正常路径，未知取值丢弃，均保持 `None`），本地日志与缓存不填该字段，因此前端不会替任何来源断言「已用满」。
 
-CLI 是独立版本的依赖，其协议与 discovery 实现继续留在固定快照中。应用 discovery 包含 Windows 安装位置等平台规则，不能把它与 CLI 的跨平台 discovery 当成完全等价。本次未修改或重新 vendor CLI。当前快照的 OpenCode Go 适配器在 403 时只返回 `no_data`（不带 `emptyReason`），所以「未订阅 OpenCode Go」要等 CLI 产出该字段后才会出现；应用侧已按可选字段实现，届时无需再改。
+CLI 是独立版本的依赖，其协议与 discovery 实现继续留在固定快照中。应用 discovery 包含 Windows 安装位置等平台规则，不能把它与 CLI 的跨平台 discovery 当成完全等价。本次发版把内置快照升级到 0.13.0（OpenCode Go 的配额适配器因此可用，凭据读取由 CLI 负责：2.x 凭据表 → 1.x `auth.json` 回退）；CLI 0.13.1 起 OpenCode Go 的 403 会带机器可读的 `emptyReason: notEntitled`，该版本发布后再随下次 vendor 升一次快照，应用无需改动（桥接已按可选字段解析）。当前快照的 OpenCode Go 适配器在 403 时只返回 `no_data`（不带 `emptyReason`），所以「未订阅 OpenCode Go」要等 CLI 产出该字段后才会出现；应用侧已按可选字段实现，届时无需再改。
 
 ## 缓存和失败处理
 
