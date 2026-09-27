@@ -3,9 +3,9 @@
   "private": true,
   "version": "0.6.1",
   "vibeUsageCliChannel": "latest",
-  "vibeUsageCliVersion": "0.11.0",
+  "vibeUsageCliVersion": "0.13.0",
   "type": "module",
-  "description": "Vibe Usage for Windows \u2014 AI coding tool token usage tracker (Windows port of the macOS Vibe Usage app)",
+  "description": "Vibe Usage for Windows — AI coding tool token usage tracker (Windows port of the macOS Vibe Usage app)",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

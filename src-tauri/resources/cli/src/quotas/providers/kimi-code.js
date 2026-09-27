@@ -15,7 +15,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { attachCacheScope } from '../cache.js';
-import { quotaResult } from '../schema.js';
+import { canonicalizeMeters, quotaResult } from '../schema.js';
 
 const PRODUCT_ID = 'kimi-code';
 const DEFAULT_USAGE_URL = 'https://api.kimi.com/coding/v1/usages';
@@ -149,7 +149,7 @@ export function parseKimiUsage(payload, now = new Date()) {
     }
   }
   const seen = new Set();
-  return meters.filter(meter => {
+  return canonicalizeMeters(meters).filter(meter => {
     const key = `${meter.label}\0${meter.windowSeconds || ''}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -157,6 +157,13 @@ export function parseKimiUsage(payload, now = new Date()) {
   });
 }
 
+// Kimi Code has two credential locations in the wild: the current CLI (2.x)
+// writes `$KIMI_CODE_HOME/credentials/kimi-code.json`, defaulting to
+// `~/.kimi-code` -- the same home the session parser already resolves -- while
+// kimi-cli (1.x) keeps `$KIMI_SHARE_DIR/credentials/kimi-code.json`, defaulting
+// to `~/.kimi`. Reading only the legacy path reported `missing_credentials` for
+// every 2.x user whose login sits in the new home (issue #112), while their
+// usage parsed fine, so the quota card contradicted the token tables.
 export function kimiCredentialPaths(environment = process.env, home = homedir()) {
   const codeHome = environment.KIMI_CODE_HOME?.trim() || join(home, '.kimi-code');
   const legacyHome = environment.KIMI_SHARE_DIR?.trim() || join(home, '.kimi');
@@ -164,6 +171,11 @@ export function kimiCredentialPaths(environment = process.env, home = homedir())
     .map(directory => join(directory, 'credentials', 'kimi-code.json')))];
 }
 
+// The file to read and, on refresh, to rotate atomically: the first existing
+// login, current home before legacy, so a stale `KIMI_SHARE_DIR` cannot shadow
+// the CLI the user actually runs. With no login anywhere the current CLI's path
+// is returned, so `missing_credentials` (and any rotation after a later login)
+// names the file the installed CLI writes.
 export function kimiCredentialPath(environment = process.env, home = homedir()) {
   const paths = kimiCredentialPaths(environment, home);
   for (const path of paths) {

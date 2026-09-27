@@ -227,8 +227,8 @@ export function getConfigPath() {`,
       "config EISDIR repair helpers",
     ],
     [
-      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  // The file holds the vbu_ API key",
-      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(CONFIG_FILE);\n  // The file holds the vbu_ API key",
+      "  mkdirSync(CONFIG_DIR, { recursive: true });",
+      "  mkdirSync(CONFIG_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(CONFIG_FILE);",
       "config save EISDIR repair",
     ],
   ]);
@@ -264,8 +264,11 @@ export function getStatePath() {`,
       "state EISDIR repair helpers",
     ],
     [
-      "  mkdirSync(STATE_DIR, { recursive: true });\n  // Atomic replace: write to a unique temp file then rename over the target.",
-      "  mkdirSync(STATE_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(STATE_FILE);\n  // Atomic replace: write to a unique temp file then rename over the target.",
+      // Anchor on the mkdir line alone: the comment that used to follow it is
+      // reworded whenever state.js gains a field (v0.11.1's `identity` did
+      // exactly that), and an anchor that includes prose breaks for no reason.
+      "  mkdirSync(STATE_DIR, { recursive: true });",
+      "  mkdirSync(STATE_DIR, { recursive: true });\n  moveDirectoryOutOfFilePath(STATE_FILE);",
       "state save EISDIR repair",
     ],
   ]);

@@ -12,6 +12,7 @@ import {
   grokSessionsDir,
 } from './extra-roots.js';
 import { findClineDataDirs } from './cline-roots.js';
+import { findCodeartsAgentDbs, resolveCodeartsAgentRoots } from './codearts-roots.js';
 import { findColaDataDirs, getColaSessionsDir } from './cola-roots.js';
 import { findCraftDataDirs } from './craft-roots.js';
 import { findHermesDataDirs, getHermesHome } from './hermes-roots.js';
@@ -143,6 +144,31 @@ export function getDshSessionsDir() {
   const testDir = process.env.VIBE_USAGE_DSH_SESSIONS?.trim();
   if (testDir) return testDir;
   return join(getDshHome(), 'sessions');
+}
+
+export function getDroidSessionsDir() {
+  const testDir = process.env.VIBE_USAGE_DROID_SESSIONS?.trim();
+  if (testDir) return testDir;
+  return join(homedir(), '.factory', 'sessions');
+}
+
+// Factory settings hold customModels[].id → API model. Fixture sessions must
+// not read the real ~/.factory/settings.json (API keys, and it would leak
+// machine catalog into tests).
+export function getDroidSettingsPaths() {
+  const override = process.env.VIBE_USAGE_DROID_SETTINGS?.trim();
+  if (override) return [override];
+  if (process.env.VIBE_USAGE_DROID_SESSIONS?.trim()) return [];
+  const home = join(homedir(), '.factory');
+  return [
+    join(home, 'settings.json'),
+    join(home, 'settings.local.json'),
+    join(home, 'config.json'),
+  ];
+}
+
+export function findDroidDataDirs() {
+  return [getDroidSessionsDir()].filter(existsSync);
 }
 
 // Detect DeepSeek Harness when its sessions tree exists (or the test override).
@@ -280,6 +306,12 @@ export const TOOLS = [
     detectDataDirs: ({ extraRoots } = {}) => findClaudeCodeDataDirs(extraRootList(extraRoots?.['claude-code'])),
   },
   {
+    name: 'CodeArts Agent',
+    id: 'codearts-agent',
+    dataDir: resolveCodeartsAgentRoots()[0],
+    detectDataDirs: () => findCodeartsAgentDbs(),
+  },
+  {
     name: 'Codex CLI',
     id: 'codex',
     dataDir: join(homedir(), '.codex', 'sessions'),
@@ -402,6 +434,7 @@ export const TOOLS = [
     name: 'Droid',
     id: 'droid',
     dataDir: join(homedir(), '.factory', 'sessions'),
+    detectDataDirs: findDroidDataDirs,
   },
   {
     name: 'DeepSeek Harness',
