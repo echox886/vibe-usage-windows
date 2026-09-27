@@ -79,7 +79,16 @@ function probe(
   fixture: Fixture,
   options: { localAppData?: string | null; platform?: string; modulePath?: string } = {},
 ): ProbeResult {
-  const env: NodeJS.ProcessEnv = { ...process.env, USERPROFILE: fixture.home };
+  // USERPROFILE is what `homedir()` reads on Windows; HOME is its POSIX
+  // equivalent. Setting both keeps the fixture isolated on every platform, so
+  // this suite can be run (and trusted) on a macOS contributor machine too —
+  // with only USERPROFILE set, a POSIX run used the developer's real profile and
+  // every assertion below failed for the wrong reason.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    USERPROFILE: fixture.home,
+    HOME: fixture.home,
+  };
   if (options.localAppData === null) delete env.LOCALAPPDATA;
   else env.LOCALAPPDATA = options.localAppData ?? fixture.localAppData;
   // The override would bypass the defaults entirely, which is the opposite of
@@ -103,7 +112,11 @@ describe("vendored OpenCode roots — Windows patch behaviour", () => {
   it("keeps the XDG root and adds %LOCALAPPDATA%\\opencode, XDG first", () => {
     const fixture = makeFixture({ xdg: true, windows: true });
 
-    const result = probe(fixture);
+    // The Windows branch is keyed off `process.platform`, so every case that
+    // asserts it states the platform explicitly — otherwise this suite would
+    // silently assert Linux/macOS behaviour on those hosts and only mean
+    // something on a Windows machine.
+    const result = probe(fixture, { platform: "win32" });
 
     // Both roots are reachable, and the added one does not displace or precede
     // the upstream default.
@@ -115,7 +128,7 @@ describe("vendored OpenCode roots — Windows patch behaviour", () => {
   it("keeps the XDG root when no Windows store exists", () => {
     const fixture = makeFixture({ xdg: true, windows: false });
 
-    const result = probe(fixture);
+    const result = probe(fixture, { platform: "win32" });
 
     // An absent root is skipped silently rather than warned about: it is a
     // default candidate, not a user-configured directory.
@@ -126,7 +139,7 @@ describe("vendored OpenCode roots — Windows patch behaviour", () => {
   it("finds %LOCALAPPDATA%\\opencode when the XDG root holds no store", () => {
     const fixture = makeFixture({ xdg: false, windows: true });
 
-    const result = probe(fixture);
+    const result = probe(fixture, { platform: "win32" });
 
     expect(paths(result)).toEqual([fixture.windows]);
   });
@@ -134,7 +147,7 @@ describe("vendored OpenCode roots — Windows patch behaviour", () => {
   it("falls back to the XDG root alone when LOCALAPPDATA is not set", () => {
     const fixture = makeFixture({ xdg: true, windows: true });
 
-    const result = probe(fixture, { localAppData: null });
+    const result = probe(fixture, { localAppData: null, platform: "win32" });
 
     expect(result.localAppData).toBeNull();
     expect(paths(result)).toEqual([fixture.xdg]);
