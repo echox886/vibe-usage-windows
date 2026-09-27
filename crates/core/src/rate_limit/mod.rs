@@ -46,6 +46,10 @@ pub enum RateLimitProvider {
     ZCode,
     #[serde(rename = "grok")]
     Grok,
+    /// CLI-backed like Kimi/ZCode/Grok: OpenCode's credential store is a
+    /// sqlite table, so the app never reads it itself.
+    #[serde(rename = "opencode-go")]
+    OpenCodeGo,
     #[serde(rename = "cursor")]
     Cursor,
 }
@@ -66,9 +70,13 @@ pub enum RateLimitStatus {
 /// Codex's live usage endpoint reports enforced windows exhaustively and its
 /// `rate_limit` object carries `allowed` / `limit_reached`, so an answer
 /// without any window is a fact — "used up for this period" or "nothing
-/// enforced right now" — not a read failure. Every other source (session
-/// JSONL, on-disk cache, the CLI-backed products) cannot tell the two apart
-/// from "that product has no data here", so it leaves this `None` and the card
+/// enforced right now" — not a read failure. Two other sources can also say
+/// why: OpenCode Go's usage endpoint returns 403 for a key without the Go
+/// plan, and Claude Code answers `rate_limits_available: false` for API key /
+/// Bedrock / Vertex logins. Both are definitive, so the card explains the
+/// account instead of offering a retry. Every other source (session JSONL,
+/// on-disk cache, the other CLI-backed products) cannot tell those apart from
+/// "that product has no data here", so it leaves this `None` and the card
 /// stays neutral rather than guessing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +85,12 @@ pub enum RateLimitEmptyReason {
     LimitReached,
     /// The endpoint answered without enforcing any window.
     NoWindow,
+    /// The account does not own the subscription the endpoint meters
+    /// (OpenCode Go without the Go plan).
+    NotEntitled,
+    /// The session's login method has plan windows that genuinely do not apply
+    /// (Claude Code with an API key, Bedrock or Vertex).
+    SessionWithoutPlanLimits,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -128,4 +142,32 @@ pub(crate) fn now_epoch() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_and_empty_reason_wire_ids_match_the_frontend_contract() {
+        // For CLI-backed products the provider id *is* the CLI product id, and
+        // the bridge resolves the CLI's answer back through this same string.
+        assert_eq!(
+            serde_json::from_value::<RateLimitProvider>(serde_json::json!("opencode-go")).unwrap(),
+            RateLimitProvider::OpenCodeGo
+        );
+        assert_eq!(
+            serde_json::to_value(RateLimitProvider::OpenCodeGo).unwrap(),
+            serde_json::json!("opencode-go")
+        );
+        for (reason, id) in [
+            (RateLimitEmptyReason::NotEntitled, "notEntitled"),
+            (
+                RateLimitEmptyReason::SessionWithoutPlanLimits,
+                "sessionWithoutPlanLimits",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), serde_json::json!(id));
+        }
+    }
 }

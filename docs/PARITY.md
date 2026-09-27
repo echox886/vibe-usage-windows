@@ -1,6 +1,6 @@
 # macOS ↔ Windows 对齐说明 (Parity Notes)
 
-本项目以 `vibe-usage-app`（macOS, SwiftUI, v0.6.1）为功能与视觉基准。本文档记录 1:1 对齐的映射关系与少数平台差异。
+本项目以 `vibe-usage-app`（macOS, SwiftUI, v0.7.0）为功能与视觉基准。本文档记录 1:1 对齐的映射关系与少数平台差异。
 
 ## 视觉常量（源自 Swift 源码，落在 `tailwind.config.cjs`）
 
@@ -69,7 +69,7 @@
 7. **配额悬停 tooltip**：交互与内容 1:1；Windows 使用 mouse enter/leave（无 NSTrackingArea 差异）。
 8. **配额卡片数量**：与 0.6.1 相同，不设上限、不折叠；选择顺序即卡片顺序，多于两张时横向滚动。首次启动勾选全部「已检测且已就绪」的产品（ZCode 未配置 Key 时除外，与 macOS 一致）。
 9. **设置页「托盘」分组**：macOS 的「菜单栏」对应 Windows 的「托盘」，两项合并进「常规」，不单列分组。
-10. **官方图标资产**：六家图标直接复用 macOS 已验收的官方标准资产（@2x 56px，透明底 + 官方容器），本仓库不改色、不加边框；卡片与设置页共用同一个 `ProviderIcon`。
+10. **官方图标资产**：七家图标直接复用 macOS 已验收的官方标准资产（@2x 56px，透明底 + 官方容器），本仓库不改色、不加边框；卡片与设置页共用同一个 `ProviderIcon`。
 
 ## CLI Windows 补丁（vendored，见 `scripts/vendor-cli.mjs`）
 

@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use vibe_core::{ProviderRateLimit, RateLimitProvider, RateLimitStatus, RateLimitWindow};
+use vibe_core::{
+    ProviderRateLimit, RateLimitEmptyReason, RateLimitProvider, RateLimitStatus, RateLimitWindow,
+};
 
 const CANDIDATE_TIMEOUT: Duration = Duration::from_secs(8);
 const FIVE_HOURS: f64 = 5.0 * 3600.0;
@@ -123,27 +125,19 @@ async fn run_probe(candidate: &Path) -> Result<ProviderRateLimit, String> {
         }
     };
 
-    if payload
-        .get("rate_limits_available")
-        .and_then(Value::as_bool)
-        == Some(false)
-    {
-        crate::process_utils::kill_child_tree(&mut child);
-        return Err("当前 Claude 登录方式没有订阅配额".into());
+    if let Some(snapshot) = snapshot_from_payload(&payload, now_epoch()) {
+        // stdin was closed by `exchange`; give the child a short graceful-exit
+        // window, then terminate the whole tree so no helper survives a refresh.
+        if tokio::time::timeout(Duration::from_secs(1), child.wait())
+            .await
+            .is_err()
+        {
+            crate::process_utils::kill_child_tree(&mut child);
+        }
+        return Ok(snapshot);
     }
-    let Some(snapshot) = parse_payload(&payload, now_epoch()) else {
-        crate::process_utils::kill_child_tree(&mut child);
-        return Err("Claude 未返回可用配额".into());
-    };
-    // stdin was closed by `exchange`; give the child a short graceful-exit
-    // window, then terminate the whole tree so no helper survives a refresh.
-    if tokio::time::timeout(Duration::from_secs(1), child.wait())
-        .await
-        .is_err()
-    {
-        crate::process_utils::kill_child_tree(&mut child);
-    }
-    Ok(snapshot)
+    crate::process_utils::kill_child_tree(&mut child);
+    Err("Claude 未返回可用配额".into())
 }
 
 async fn exchange(
@@ -196,6 +190,26 @@ async fn send(stdin: &mut tokio::process::ChildStdin, value: &Value) -> Result<(
     let mut data = serde_json::to_vec(value).map_err(|e| e.to_string())?;
     data.push(b'\n');
     stdin.write_all(&data).await.map_err(|e| e.to_string())
+}
+
+/// Claude's answer for one probe payload.
+///
+/// `rate_limits_available: false` is Claude saying this login method (API key,
+/// Bedrock, Vertex) has no plan windows at all. That is definitive, so it must
+/// not be collapsed into "no data here": the card explains the account instead
+/// of looking like a missing install and offering a retry that cannot help.
+fn snapshot_from_payload(root: &Value, now: f64) -> Option<ProviderRateLimit> {
+    if root
+        .get("rate_limits_available")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        let mut snapshot =
+            ProviderRateLimit::empty(RateLimitProvider::ClaudeCode, RateLimitStatus::NoData);
+        snapshot.empty_reason = Some(RateLimitEmptyReason::SessionWithoutPlanLimits);
+        return Some(snapshot);
+    }
+    parse_payload(root, now)
 }
 
 fn parse_payload(root: &Value, now: f64) -> Option<ProviderRateLimit> {
@@ -327,6 +341,27 @@ mod tests {
         let result = parse_payload(&payload, 1_800_000_000.0).unwrap();
         assert_eq!(result.plan_label.as_deref(), Some("Max"));
         assert_eq!(result.five_hour.unwrap().utilization, 14.0);
+    }
+
+    #[test]
+    fn not_applicable_login_reports_the_login_method_instead_of_missing_data() {
+        let snapshot =
+            snapshot_from_payload(&json!({"rate_limits_available": false}), 1_800_000_000.0)
+                .unwrap();
+        assert_eq!(snapshot.status, RateLimitStatus::NoData);
+        assert_eq!(
+            snapshot.empty_reason,
+            Some(RateLimitEmptyReason::SessionWithoutPlanLimits)
+        );
+
+        // A plan-backed session keeps the ordinary live parsing path.
+        let payload = json!({
+            "rate_limits_available": true,
+            "rate_limits":{"five_hour":{"utilization":14,"resets_at":"2030-01-01T01:00:00Z"}}
+        });
+        let snapshot = snapshot_from_payload(&payload, 1_800_000_000.0).unwrap();
+        assert_eq!(snapshot.status, RateLimitStatus::Ok);
+        assert_eq!(snapshot.empty_reason, None);
     }
 
     #[test]

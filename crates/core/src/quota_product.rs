@@ -158,6 +158,14 @@ pub fn catalog() -> &'static [ProductDefinition] {
             relative_paths: &[".grok"],
         },
         ProductDefinition {
+            provider: OpenCodeGo,
+            display_name: "OpenCode Go",
+            availability: Ready,
+            cli_id: Some("opencode-go"),
+            command: "opencode",
+            relative_paths: &[".local/share/opencode"],
+        },
+        ProductDefinition {
             provider: Cursor,
             display_name: "Cursor",
             availability: PendingProtocol,
@@ -257,6 +265,10 @@ fn application_paths(
                 paths.push(root.join("cursor").join("Cursor.exe"));
             }
             RateLimitProvider::KimiCode | RateLimitProvider::Grok => {}
+            // OpenCode keeps its data + credential store under
+            // `%LOCALAPPDATA%\opencode` on Windows, which the home-relative
+            // `relative_paths` cannot express.
+            RateLimitProvider::OpenCodeGo => paths.push(root.join("opencode")),
         }
     }
     if let Some(app_data) = &environment.app_data {
@@ -314,7 +326,14 @@ mod tests {
                 assert_eq!(serde_json::to_value(product.provider).unwrap(), id);
             }
         }
-        assert_eq!(ids, HashSet::from(["kimi-code", "zcode", "grok"]));
+        assert_eq!(
+            ids,
+            HashSet::from(["kimi-code", "zcode", "grok", "opencode-go"])
+        );
+        assert_eq!(
+            cli_provider("opencode-go"),
+            Some(RateLimitProvider::OpenCodeGo)
+        );
         assert_eq!(cli_id(RateLimitProvider::Cursor), None);
         assert_eq!(cli_id(RateLimitProvider::Codex), None);
         assert_eq!(cli_id(RateLimitProvider::ClaudeCode), None);
@@ -365,6 +384,51 @@ mod tests {
         assert!(products
             .iter()
             .any(|product| product.provider == RateLimitProvider::Cursor && product.is_detected));
+    }
+
+    #[test]
+    fn discovers_opencode_go_in_the_windows_store_and_the_home_relative_root() {
+        let store = tempfile::tempdir().unwrap();
+        let store_env = environment(store.path());
+        assert!(!detected(
+            &discover_with(&store_env),
+            RateLimitProvider::OpenCodeGo
+        ));
+
+        // Windows keeps OpenCode's data and credential store in
+        // `%LOCALAPPDATA%\opencode`, outside the home-relative roots.
+        fs::create_dir_all(store_env.local_app_data.as_ref().unwrap().join("opencode")).unwrap();
+        assert!(detected(
+            &discover_with(&store_env),
+            RateLimitProvider::OpenCodeGo
+        ));
+
+        // The XDG-shaped root the CLI itself resolves still counts too.
+        let home = tempfile::tempdir().unwrap();
+        let home_env = environment(home.path());
+        assert!(!detected(
+            &discover_with(&home_env),
+            RateLimitProvider::OpenCodeGo
+        ));
+        fs::create_dir_all(
+            home_env
+                .home
+                .join(".local")
+                .join("share")
+                .join("opencode"),
+        )
+        .unwrap();
+        assert!(detected(
+            &discover_with(&home_env),
+            RateLimitProvider::OpenCodeGo
+        ));
+    }
+
+    fn detected(products: &[QuotaProduct], provider: RateLimitProvider) -> bool {
+        products
+            .iter()
+            .find(|product| product.provider == provider)
+            .is_some_and(|product| product.is_detected)
     }
 
     #[test]

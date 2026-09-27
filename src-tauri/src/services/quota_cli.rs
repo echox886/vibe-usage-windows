@@ -8,7 +8,9 @@ use std::process::Stdio;
 use std::time::Duration;
 use tauri::AppHandle;
 use vibe_core::quota_product::{cli_id, cli_provider, ZCodeQuotaRegion};
-use vibe_core::{ProviderRateLimit, RateLimitMeter, RateLimitProvider, RateLimitStatus};
+use vibe_core::{
+    ProviderRateLimit, RateLimitEmptyReason, RateLimitMeter, RateLimitProvider, RateLimitStatus,
+};
 
 const SCHEMA_VERSION: u32 = 1;
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -75,6 +77,9 @@ struct Product {
     plan_label: Option<String>,
     fetched_at: String,
     data_as_of: Option<String>,
+    /// Optional in the CLI contract: a snapshot that predates the field (or a
+    /// source that cannot say) simply omits it.
+    empty_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,9 +229,23 @@ fn map_product(product: Product) -> Result<ProviderRateLimit, FetchError> {
         fetched_at: parse_epoch(&product.fetched_at),
         five_hour_not_enforced: false,
         reset_credits_count: None,
-        empty_reason: None,
+        empty_reason: product.empty_reason.as_deref().and_then(empty_reason),
         status,
     })
+}
+
+/// The CLI may name why a product answered without a window. Absent/null means
+/// its snapshot predates this field — the normal path today — and an unknown
+/// token means a newer CLI spoke a reason this app cannot render; both stay
+/// `None` so the card reports no verdict rather than guessing.
+fn empty_reason(raw: &str) -> Option<RateLimitEmptyReason> {
+    match raw {
+        "limitReached" => Some(RateLimitEmptyReason::LimitReached),
+        "noWindow" => Some(RateLimitEmptyReason::NoWindow),
+        "notEntitled" => Some(RateLimitEmptyReason::NotEntitled),
+        "sessionWithoutPlanLimits" => Some(RateLimitEmptyReason::SessionWithoutPlanLimits),
+        _ => None,
+    }
 }
 
 fn parse_epoch(value: &str) -> Option<f64> {
@@ -302,6 +321,39 @@ mod tests {
         assert_eq!(snapshots[0].provider, RateLimitProvider::Grok);
         assert_eq!(snapshots[0].meters[0].label, "7d");
         assert_eq!(snapshots[0].meters[0].utilization, 30.0);
+    }
+
+    #[test]
+    fn maps_an_optional_cli_empty_reason_and_ignores_unknown_tokens() {
+        let snapshot = |extra: &str| {
+            decode(
+                format!(
+                    r#"{{"schemaVersion":1,"products":[{{"id":"opencode-go","status":"no_data","meters":[],"fetchedAt":"2026-09-08T02:00:00Z"{extra}}}]}}"#
+                )
+                .as_bytes(),
+                &[RateLimitProvider::OpenCodeGo],
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let not_entitled = snapshot(r#","emptyReason":"notEntitled""#);
+        assert_eq!(not_entitled.status, RateLimitStatus::NoData);
+        assert_eq!(
+            not_entitled.empty_reason,
+            Some(RateLimitEmptyReason::NotEntitled)
+        );
+        assert_eq!(
+            snapshot(r#","emptyReason":"sessionWithoutPlanLimits""#).empty_reason,
+            Some(RateLimitEmptyReason::SessionWithoutPlanLimits)
+        );
+        assert_eq!(
+            snapshot(r#","emptyReason":"limitReached""#).empty_reason,
+            Some(RateLimitEmptyReason::LimitReached)
+        );
+        // A snapshot that predates the field is the normal path, and a newer
+        // CLI naming a reason this app cannot render must not error either.
+        assert_eq!(snapshot("").empty_reason, None);
+        assert_eq!(snapshot(r#","emptyReason":"whoKnows""#).empty_reason, None);
     }
 
     #[test]
