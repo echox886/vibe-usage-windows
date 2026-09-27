@@ -259,10 +259,23 @@ function walkTree(dir, rel = "") {
 }
 
 /** Compare two CLI trees. Line endings are normalised: git may rewrite EOL. */
+/**
+ * `.vibe-usage-source.json` records *how* the snapshot was produced (channel vs
+ * `--from-local`, and the source commit). The rebuild path always vendors with
+ * `--from-local` from an unpacked tarball, so its `source` can never equal a
+ * snapshot vendored from the registry — comparing it byte for byte made every
+ * rebuild report "not reproducible", which is a failure that never clears and
+ * therefore stops meaning anything. The pin it could disagree about (the
+ * version) is already checked against `identity.version` above.
+ */
+const PROVENANCE_FILE = ".vibe-usage-source.json";
+
 function compareTrees(rebuiltDir, checkedInDir) {
   const norm = (b) => b.toString("utf8").replace(/\r\n/g, "\n");
   const a = walkTree(rebuiltDir);
   const b = walkTree(checkedInDir);
+  a.delete(PROVENANCE_FILE);
+  b.delete(PROVENANCE_FILE);
   const missing = [...a.keys()].filter((k) => !b.has(k)).sort();
   const extra = [...b.keys()].filter((k) => !a.has(k)).sort();
   const differing = [...a.keys()]
