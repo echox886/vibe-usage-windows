@@ -175,7 +175,8 @@ export type RateLimitProvider =
   | "kimi-code"
   | "zcode"
   | "grok"
-  | "cursor";
+  | "cursor"
+  | "opencode-go";
 
 export interface RateLimitMeter {
   id: string;
@@ -204,7 +205,22 @@ export type RateLimitStatus =
  * "used up" apart from "nothing here", so it leaves this null and the card
  * stays neutral rather than guessing.
  */
-export type RateLimitEmptyReason = "limitReached" | "noWindow";
+export type RateLimitEmptyReason =
+  | "limitReached"
+  | "noWindow"
+  /**
+   * The endpoint answered, but the account does not own the subscription
+   * (OpenCode Go returns 403 for a key without the Go plan). A retry cannot
+   * change it, so the card must not offer one.
+   */
+  | "notEntitled"
+  /**
+   * Claude Code answered `rate_limits_available: false`: this session is
+   * authenticated with an API key, Bedrock or Vertex, where plan windows
+   * genuinely do not apply. Also a definitive answer — the card explains
+   * instead of offering a retry that cannot produce windows.
+   */
+  | "sessionWithoutPlanLimits";
 
 export interface ProviderRateLimit {
   provider: RateLimitProvider;
@@ -270,6 +286,17 @@ export interface AppSettings {
   codexRateLimitEnabled: boolean;
   claudeRateLimitEnabled: boolean;
   selectedQuotaProductIds: RateLimitProvider[];
+  /**
+   * Display order of every catalog product, enabled or not. The tab strip
+   * renders enabled products first, so this decides the sequence *within* each
+   * of those two groups (mirrors the macOS `quotaProductOrder` key).
+   */
+  quotaProductOrder: RateLimitProvider[];
+  /**
+   * The tab the user last looked at; used to restore the card row's scroll
+   * position (mirrors the macOS `quotaSelectedTabId` key).
+   */
+  quotaSelectedTabId?: RateLimitProvider | null;
   quotaSelectionInitialized: boolean;
   zCodeQuotaRegion: ZCodeQuotaRegion;
 }

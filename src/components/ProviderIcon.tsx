@@ -5,13 +5,14 @@
 // box stays crisp on HiDPI displays; no recolouring, no added border.
 
 import { useState } from "react";
-import { Sparkles, SquareTerminal } from "lucide-react";
+import { Code, Sparkles, SquareTerminal } from "lucide-react";
 import { RateLimitProvider } from "../lib/types";
 import claudeIcon from "../assets/claude-icon.png";
 import codexIcon from "../assets/codex-icon.png";
 import cursorIcon from "../assets/cursor-icon.png";
 import grokIcon from "../assets/grok-icon.png";
 import kimiIcon from "../assets/kimi-icon.png";
+import openCodeIcon from "../assets/opencode-icon@2x.png";
 import zcodeIcon from "../assets/zcode-icon.png";
 
 const ICONS: Record<RateLimitProvider, string> = {
@@ -21,6 +22,7 @@ const ICONS: Record<RateLimitProvider, string> = {
   zcode: zcodeIcon,
   grok: grokIcon,
   cursor: cursorIcon,
+  "opencode-go": openCodeIcon,
 };
 
 const FALLBACKS: Record<RateLimitProvider, typeof Sparkles> = {
@@ -30,6 +32,7 @@ const FALLBACKS: Record<RateLimitProvider, typeof Sparkles> = {
   zcode: Sparkles,
   grok: Sparkles,
   cursor: Sparkles,
+  "opencode-go": Code,
 };
 
 export function ProviderIcon({

@@ -1,8 +1,9 @@
 // Subscription quota selector and provider-neutral cards.
 
 import { ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Info, RefreshCw } from "lucide-react";
+
 import { AppStateValue, useAppState } from "../state/AppStateContext";
 import {
   ProviderRateLimit,
@@ -14,11 +15,11 @@ import {
   canonicalQuotaMeters,
   providerLabel,
   quotaEmptyStateText,
-  quotaProductStatusText,
 } from "../lib/quotaProducts";
 import { elapsedPercent, utilizationColor } from "../lib/aggregate";
 import { formatPercent, formatTimeUntil } from "../lib/formatters";
 import { ProviderIcon } from "./ProviderIcon";
+import { QuotaTabStrip } from "./QuotaTabStrip";
 
 /**
  * Fixed card width. Two cards plus the 8 px gap fill the panel's content box
@@ -32,6 +33,9 @@ const CARD_GAP = 8;
 export function RateLimitCards() {
   const state = useAppState();
   const selected = state.settings.selectedQuotaProductIds;
+  const tabOrder = state.quotaTabOrder;
+  // Only enabled products own a card; the strip still lists the whole catalog.
+  const cardProviders = tabOrder.filter((provider) => selected.includes(provider));
   const scrollerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef({
     active: false,
@@ -42,42 +46,51 @@ export function RateLimitCards() {
   });
   const suppressClickRef = useRef(false);
   const [dragging, setDragging] = useState(false);
-  const [carousel, setCarousel] = useState({
-    hasOverflow: false,
-    canScrollLeft: false,
-    canScrollRight: false,
+  const [activeProvider, setActiveProvider] = useState<RateLimitProvider>(() => {
+    const stored = state.settings.quotaSelectedTabId;
+    if (stored && cardProviders.includes(stored)) return stored;
+    return cardProviders[0] ?? tabOrder[0] ?? "codex";
   });
 
-  const syncCarousel = useCallback(() => {
-    const scroller = scrollerRef.current;
-    if (!scroller) return;
-    const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
-    const scrollLeft = Math.min(maxScrollLeft, Math.max(0, scroller.scrollLeft));
-    setCarousel({
-      hasOverflow: maxScrollLeft > 1,
-      canScrollLeft: scrollLeft > 1,
-      canScrollRight: scrollLeft < maxScrollLeft - 1,
-    });
-  }, []);
+  const step = CARD_WIDTH + CARD_GAP;
 
+  /** The card nearest the leading edge is the one on screen; the strip follows
+   *  it and the choice is persisted, so the row reopens where the user left it. */
+  const syncActiveFromScroll = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller || cardProviders.length === 0) return;
+    const index = Math.min(
+      cardProviders.length - 1,
+      Math.max(0, Math.round(scroller.scrollLeft / step)),
+    );
+    const provider = cardProviders[index];
+    setActiveProvider((current) => (current === provider ? current : provider));
+    state.selectQuotaTab(provider);
+  }, [cardProviders, state, step]);
+
+  const selectFromTab = useCallback(
+    (provider: RateLimitProvider) => {
+      setActiveProvider(provider);
+      state.selectQuotaTab(provider);
+      const index = cardProviders.indexOf(provider);
+      if (index < 0) return;
+      scrollerRef.current?.scrollTo({ left: index * step, behavior: "smooth" });
+    },
+    [cardProviders, state, step],
+  );
+
+  // Restore the last-viewed product as the leading card. Keyed on the row's
+  // membership/order rather than on `activeProvider`: keying on the highlight
+  // would fight the user's own scrolling.
+  const rowSignature = cardProviders.join(",");
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
-    const frame = window.requestAnimationFrame(syncCarousel);
-    const observer = new ResizeObserver(syncCarousel);
-    observer.observe(scroller);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [selected.length, syncCarousel]);
-
-  const scrollCards = (direction: -1 | 1) => {
-    scrollerRef.current?.scrollBy({
-      left: direction * 2 * (CARD_WIDTH + CARD_GAP),
-      behavior: "smooth",
-    });
-  };
+    const index = cardProviders.indexOf(activeProvider);
+    if (index <= 0) return;
+    scroller.scrollTo({ left: index * step });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
+  }, [rowSignature]);
 
   const onCardsWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     const scroller = scrollerRef.current;
@@ -141,47 +154,21 @@ export function RateLimitCards() {
 
   return (
     <section className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold" style={{ color: "#B8B8B8" }}>
-          订阅配额
-        </span>
-        <div className="grow" />
-        {carousel.hasOverflow && (
-          <div className="flex items-center gap-1" aria-label="切换订阅配额产品">
-            <CarouselButton
-              label="查看上一组产品"
-              disabled={!carousel.canScrollLeft}
-              onClick={() => scrollCards(-1)}
-            >
-              <ChevronLeft size={12} />
-            </CarouselButton>
-            <CarouselButton
-              label="查看下一组产品"
-              disabled={!carousel.canScrollRight}
-              onClick={() => scrollCards(1)}
-            >
-              <ChevronRight size={12} />
-            </CarouselButton>
-          </div>
-        )}
-        <ProductSelector />
-      </div>
+      <QuotaTabStrip activeProvider={activeProvider} onSelect={selectFromTab} />
 
-      {/* One card per enabled product, in selection order, inside a horizontal
-          scroller. An enabled product must always show its own state: a
-          collapsed section reads as "this feature is off" precisely when the
-          user wants to know why nothing is shown. */}
-      {selected.length === 0 ? (
-        <NoticeBar />
-      ) : (
+      {/* One card per *enabled* product, in strip order, inside a horizontal
+          scroller (two per screen). A product whose monitoring is off has no
+          card at all — its grey tab leads to Settings — so an all-off selection
+          leaves the section at the icon row instead of a row of placeholders. */}
+      {cardProviders.length === 0 ? null : (
         <div
           ref={scrollerRef}
-          aria-label="已选择的订阅配额产品"
+          aria-label="已启用的订阅配额产品"
           className={`no-scrollbar flex items-stretch gap-2 overflow-x-auto ${
-            selected.length > 2 ? (dragging ? "cursor-grabbing" : "cursor-grab") : ""
+            cardProviders.length > 2 ? (dragging ? "cursor-grabbing" : "cursor-grab") : ""
           }`}
           style={{ scrollSnapType: dragging ? "none" : "x mandatory", touchAction: "pan-y" }}
-          onScroll={syncCarousel}
+          onScroll={syncActiveFromScroll}
           onWheel={onCardsWheel}
           onPointerDown={onCardsPointerDown}
           onPointerMove={onCardsPointerMove}
@@ -194,7 +181,7 @@ export function RateLimitCards() {
           }}
           onDragStart={(event) => event.preventDefault()}
         >
-          {selected.map((provider) => (
+          {cardProviders.map((provider) => (
             <div
               key={provider}
               className="shrink-0"
@@ -210,110 +197,6 @@ export function RateLimitCards() {
         <div className="text-[11px] text-red-400">{state.quotaSelectionError}</div>
       )}
     </section>
-  );
-}
-
-function CarouselButton({
-  label,
-  disabled,
-  onClick,
-  children,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="flex h-6 w-6 items-center justify-center rounded border border-white/10 bg-white/[0.06] text-neutral-400 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-white/50 disabled:cursor-default disabled:opacity-25"
-    >
-      {children}
-    </button>
-  );
-}
-
-function ProductSelector() {
-  const state = useAppState();
-  const [open, setOpen] = useState(false);
-  const selected = state.settings.selectedQuotaProductIds;
-
-  return (
-    <div className="relative z-50">
-      <button
-        aria-expanded={open}
-        aria-haspopup="menu"
-        className="flex items-center gap-1 rounded px-2 py-1 text-[10.5px] font-medium"
-        style={{ color: "#B8B8B8", background: "#1C1C1C", border: "1px solid #333333" }}
-        onClick={() => setOpen((value) => !value)}
-      >
-        选择 {selected.length}
-        <ChevronDown size={11} />
-      </button>
-
-      {open && (
-        <div
-          role="menu"
-          className="absolute right-0 top-[calc(100%+5px)] w-[238px] overflow-hidden rounded-md border border-white/15 bg-[#202022] py-1 shadow-xl"
-        >
-          {state.quotaProducts.map((product) => {
-            const checked = selected.includes(product.provider);
-            return (
-              <button
-                key={product.provider}
-                role="menuitemcheckbox"
-                aria-checked={checked}
-                className="flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-white/10"
-                onClick={() => {
-                  setOpen(false);
-                  void state.setQuotaProductSelected(product.provider, !checked);
-                }}
-              >
-                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-white/20">
-                  {checked && <Check size={11} color="#34C759" strokeWidth={3} />}
-                </span>
-                <span className="min-w-0 grow">
-                  <span className="block text-xs text-white">{product.displayName}</span>
-                  <span className="block truncate text-[10px] text-neutral-500">
-                    {quotaProductStatusText(
-                      product,
-                      state.zCodeCredentialStatus,
-                      state.settings.zCodeQuotaRegion,
-                      state.rateLimits.find((snapshot) => snapshot.provider === product.provider),
-                    )}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-          <div className="my-1 h-px bg-white/10" />
-          <button
-            role="menuitem"
-            className="flex w-full items-center gap-2 px-2.5 py-2 text-left text-[11px] text-neutral-300 hover:bg-white/10"
-            onClick={() => {
-              setOpen(false);
-              void state.rediscoverQuotaProducts();
-            }}
-          >
-            <RefreshCw size={12} />
-            重新检测本机产品
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function NoticeBar() {
-  return (
-    <div className="flex items-center gap-1.5" style={{ color: "#666666" }}>
-      <Info size={10} />
-      <span className="text-[11px]">自动识别本机产品；请选择要显示的产品</span>
-    </div>
   );
 }
 
@@ -360,8 +243,14 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
     }
     if (snapshot.sevenDay) rows.push({ kind: "live", label: "7d", window: snapshot.sevenDay });
   }
-  const visibleRows = rows.slice(0, 2);
-  const extraMeterCount = Math.max(0, rows.length - visibleRows.length);
+  // Cards stay compact even when a provider exposes model-specific or
+  // pay-as-you-go meters: the first three windows are shown and any remainder
+  // folds behind a clickable line (mirrors RateLimitCardView.compactMeterLimit,
+  // which covers Codex 5h/7d and OpenCode Go 5h/Weekly/Monthly outright).
+  const [expanded, setExpanded] = useState(false);
+  const compactMeterLimit = 3;
+  const visibleRows = expanded ? rows : rows.slice(0, compactMeterLimit);
+  const foldedMeterCount = Math.max(0, rows.length - compactMeterLimit);
 
   return (
     <div className="flex h-full min-w-0 flex-col gap-2.5 rounded-card border border-card-border bg-card px-3 py-[11px]">
@@ -397,9 +286,19 @@ function ProviderCard({ snapshot }: { snapshot: ProviderRateLimit }) {
         <MessageContent text="暂时无法读取订阅配额" />
       )}
       {snapshot.status.kind === "error" && <MessageContent text={snapshot.status.message} />}
-      {snapshot.status.kind === "ok" && (
-        <FreshnessNote snapshot={snapshot} additionalMeterCount={extraMeterCount} />
+      {snapshot.status.kind === "ok" && foldedMeterCount > 0 && (
+        <button
+          type="button"
+          className="flex w-fit items-center gap-1 text-[10px] text-neutral-500 hover:text-neutral-300"
+          aria-expanded={expanded}
+          title={expanded ? "收起多余的配额窗口" : `展开全部 ${rows.length} 个配额窗口`}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "收起" : `另有 ${foldedMeterCount} 项`}
+          {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+        </button>
       )}
+      {snapshot.status.kind === "ok" && <FreshnessNote snapshot={snapshot} />}
     </div>
   );
 }
@@ -409,6 +308,8 @@ function unauthorizedText(provider: RateLimitProvider, region: "bigModel" | "zAI
     return `请在设置中配置 ${region === "bigModel" ? "BigModel" : "Z.ai"} API Key`;
   }
   if (provider === "kimi-code") return "请重新登录 Kimi Code 后重试";
+  // The key comes from OpenCode's own store; only OpenCode can re-issue it.
+  if (provider === "opencode-go") return "请在 OpenCode 中重新登录后重试";
   return `请打开 ${label} 使用一次后重试`;
 }
 
@@ -424,7 +325,12 @@ function emptyStateText(snapshot: ProviderRateLimit, state: AppStateValue): stri
   }
   const detected =
     state.quotaProducts.find((item) => item.provider === snapshot.provider)?.isDetected === true;
-  return quotaEmptyStateText(snapshot, detected);
+  return quotaEmptyStateText(
+    snapshot,
+    detected,
+    false,
+    providerLabel(snapshot.provider, state.quotaProducts),
+  );
 }
 
 function QuietText({ text }: { text: string }) {
@@ -602,20 +508,13 @@ function TooltipLayer({ anchor, children }: { anchor: HTMLElement; children: Rea
   );
 }
 
-function FreshnessNote({
-  snapshot,
-  additionalMeterCount,
-}: {
-  snapshot: ProviderRateLimit;
-  additionalMeterCount: number;
-}) {
+function FreshnessNote({ snapshot }: { snapshot: ProviderRateLimit }) {
   const ageMinutes = snapshot.dataAsOf
     ? Math.max(0, Math.floor((Date.now() / 1000 - snapshot.dataAsOf) / 60))
     : 0;
   const notes = [
     ageMinutes >= 5 ? `数据截至 ${ageMinutes} 分钟前` : null,
     snapshot.resetCreditsCount ? `重置券 ×${snapshot.resetCreditsCount}` : null,
-    additionalMeterCount > 0 ? `另有 ${additionalMeterCount} 项` : null,
   ].filter(Boolean);
   if (notes.length === 0) return null;
   return <div className="truncate text-[10px] text-neutral-500">{notes.join(" · ")}</div>;

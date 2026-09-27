@@ -3,10 +3,13 @@ import {
   canonicalQuotaMeters,
   compactQuotaStatus,
   isZCodeConfigured,
+  moveQuotaProduct,
   quotaEmptyStateText,
   quotaProductStatusText,
+  quotaTabOrder,
+  quotaTabShowsWarning,
 } from "../src/lib/quotaProducts";
-import { ProviderRateLimit, QuotaProduct } from "../src/lib/types";
+import { ProviderRateLimit, QuotaProduct, RateLimitProvider } from "../src/lib/types";
 
 describe("quota product presentation", () => {
   const grok: QuotaProduct = { provider: "grok", displayName: "Grok", availability: "ready", isDetected: true };
@@ -114,5 +117,86 @@ describe("empty quota card copy", () => {
     const product: ProviderRateLimit = { provider: "grok", status: { kind: "noData" } };
     expect(quotaEmptyStateText(product, true)).toBe("暂未读取到订阅配额数据");
     expect(quotaEmptyStateText(product, false)).toBe("未检测到本机安装或登录");
+  });
+});
+
+describe("tab strip model", () => {
+  const catalog: RateLimitProvider[] = ["codex", "claudeCode", "kimi-code", "zcode", "grok", "cursor", "opencode-go"];
+
+  it("lists enabled products first, then the grey ones, each in stored order", () => {
+    const stored: RateLimitProvider[] = ["opencode-go", "grok", "cursor", "codex", "claudeCode"];
+    const order = quotaTabOrder(catalog, ["grok", "codex"], stored);
+
+    expect(order.slice(0, 2)).toEqual(["grok", "codex"]);
+    expect(new Set(order.slice(2))).toEqual(new Set(["opencode-go", "cursor", "claudeCode", "kimi-code", "zcode"]));
+    // Every catalog product keeps a tab: an id the stored order forgot is
+    // appended rather than dropped, and a ghost id disappears.
+    expect(order).toHaveLength(catalog.length);
+  });
+
+  it("ignores ids that are no longer in the catalog", () => {
+    const order = quotaTabOrder(catalog, ["codex"], ["codex", "ghost-product" as RateLimitProvider]);
+    expect(order).not.toContain("ghost-product");
+    expect(order[0]).toBe("codex");
+  });
+
+  it("keeps the stored order as render order after a drop", () => {
+    const stored: RateLimitProvider[] = ["codex", "claudeCode", "grok", "kimi-code"];
+    const enabled: RateLimitProvider[] = ["codex", "claudeCode", "grok"];
+
+    expect(moveQuotaProduct(stored, enabled, "grok", "codex")).toEqual([
+      "grok", "codex", "claudeCode", "kimi-code",
+    ]);
+  });
+
+  it("drops past the last tab at the end of the dragged product's own group", () => {
+    const stored: RateLimitProvider[] = ["codex", "claudeCode", "grok", "kimi-code"];
+    const enabled: RateLimitProvider[] = ["codex", "claudeCode"];
+
+    // grok is disabled, so "the end" is the end of the grey group, not of the row.
+    expect(moveQuotaProduct(stored, enabled, "grok", null)).toEqual([
+      "codex", "claudeCode", "kimi-code", "grok",
+    ]);
+  });
+
+  it("normalizes a cross-group drop back into the dragged product's group", () => {
+    const stored: RateLimitProvider[] = ["codex", "kimi-code"];
+    const enabled: RateLimitProvider[] = ["codex"];
+
+    // Dropping the grey kimi-code onto the enabled codex cannot lift it above it.
+    expect(moveQuotaProduct(stored, enabled, "kimi-code", "codex")).toEqual(["codex", "kimi-code"]);
+  });
+
+  it("marks enabled products whose last read is not ok, and only those", () => {
+    const enabled: RateLimitProvider[] = ["codex", "opencode-go"];
+    const notEntitled: ProviderRateLimit = {
+      provider: "opencode-go",
+      status: { kind: "noData" },
+      emptyReason: "notEntitled",
+    };
+
+    expect(quotaTabShowsWarning("opencode-go", enabled, notEntitled, false)).toBe(true);
+    // A healthy read, a disabled product and a product with no snapshot yet stay plain.
+    expect(quotaTabShowsWarning("codex", enabled, { provider: "codex", status: { kind: "ok" } }, false)).toBe(false);
+    expect(quotaTabShowsWarning("grok", enabled, notEntitled, false)).toBe(false);
+    expect(quotaTabShowsWarning("codex", enabled, undefined, false)).toBe(false);
+    // A fetch in flight is not a problem: the card shows its spinner.
+    expect(quotaTabShowsWarning("opencode-go", enabled, notEntitled, true)).toBe(false);
+  });
+});
+
+describe("empty state reasons", () => {
+  it("names the product for a missing subscription", () => {
+    expect(
+      quotaEmptyStateText({ provider: "opencode-go", status: { kind: "noData" }, emptyReason: "notEntitled" },
+        true, false, "OpenCode Go"),
+    ).toBe("未订阅 OpenCode Go");
+  });
+
+  it("explains a Claude session that has no plan windows", () => {
+    expect(
+      quotaEmptyStateText({ provider: "claudeCode", status: { kind: "noData" }, emptyReason: "sessionWithoutPlanLimits" },
+        true),
+    ).toBe("当前登录方式不含订阅额度（API Key / Bedrock / Vertex）");
   });
 });

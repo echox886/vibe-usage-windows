@@ -34,6 +34,10 @@ import {
   ZCodeCredentialStatus,
 } from "../lib/types";
 import { localDayKey } from "../lib/formatters";
+import {
+  moveQuotaProduct as computeQuotaProductOrder,
+  quotaTabOrder as computeQuotaTabOrder,
+} from "../lib/quotaProducts";
 import { invoke } from "@tauri-apps/api/core";
 
 /** The dashboard/quota state every component reads through `useAppState`. */
@@ -67,6 +71,8 @@ export interface AppStateValue {
   syncState: SyncState;
   rateLimits: ProviderRateLimit[];
   quotaProducts: QuotaProduct[];
+  /** Enabled products first, then the disabled ones (see `quotaTabOrder`). */
+  quotaTabOrder: RateLimitProvider[];
   zCodeCredentialStatus: ZCodeCredentialStatus;
   isRefreshingRateLimits: boolean;
   quotaSelectionError: string | null;
@@ -77,6 +83,10 @@ export interface AppStateValue {
   triggerSync: () => Promise<void>;
   refreshRateLimits: (force: boolean) => Promise<void>;
   setQuotaProductSelected: (provider: RateLimitProvider, selected: boolean) => Promise<void>;
+  /** Remember which tab the user is looking at (view state only). */
+  selectQuotaTab: (provider: RateLimitProvider) => void;
+  /** Reorder the tab strip; `target === null` means "past the last tab". */
+  moveQuotaProduct: (provider: RateLimitProvider, target: RateLimitProvider | null) => void;
   rediscoverQuotaProducts: () => Promise<void>;
 }
 
@@ -88,9 +98,26 @@ const DEFAULT_SETTINGS: AppSettings = {
   codexRateLimitEnabled: true,
   claudeRateLimitEnabled: false,
   selectedQuotaProductIds: [],
+  quotaProductOrder: [],
+  quotaSelectedTabId: null,
   quotaSelectionInitialized: false,
   zCodeQuotaRegion: "bigModel",
 };
+
+/**
+ * True when a settings patch changes nothing the tab strip persists. Keeping
+ * this out of the update path stops a re-render from rewriting settings.json
+ * on every card scroll.
+ */
+function sameQuotaViewState(left: AppSettings, right: AppSettings): boolean {
+  const sameTab = left.quotaSelectedTabId === right.quotaSelectedTabId;
+  const leftOrder = left.quotaProductOrder ?? [];
+  const rightOrder = right.quotaProductOrder ?? [];
+  const sameOrder =
+    leftOrder.length === rightOrder.length &&
+    leftOrder.every((provider, index) => provider === rightOrder[index]);
+  return sameTab && sameOrder;
+}
 
 const EMPTY_ZCODE_CREDENTIAL_STATUS: ZCodeCredentialStatus = {
   bigModelConfigured: false,
@@ -150,6 +177,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   rangeRef.current = { timeRange, from: customRangeFrom, to: customRangeTo };
   const configuredRef = useRef(false);
   configuredRef.current = configured;
+  // The tab strip persists through the same settings object Rust owns, so the
+  // latest value has to be readable from callbacks that do not re-subscribe.
+  const settingsRef = useRef<AppSettings>(DEFAULT_SETTINGS);
+  settingsRef.current = settings;
 
   const normalizedCustomRange = useMemo(() => {
     return customRangeFrom <= customRangeTo
@@ -246,6 +277,60 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       }
     },
     [],
+  );
+
+  // Mirrors AppState.quotaTabOrder on macOS: enabled products first, then the
+  // disabled ones, each group in the persisted order (catalog order for a
+  // product the stored order does not mention yet).
+  const quotaTabOrderValue = useMemo(
+    () =>
+      computeQuotaTabOrder(
+        quotaProducts.map((product) => product.provider),
+        settings.selectedQuotaProductIds,
+        settings.quotaProductOrder ?? [],
+      ),
+    [quotaProducts, settings.selectedQuotaProductIds, settings.quotaProductOrder],
+  );
+
+  /**
+   * Persist tab-strip view state (order, last tab). Deliberately separate from
+   * `setQuotaProductSelected`: looking at or rearranging products never turns
+   * monitoring on, so this must not trigger a quota refresh or touch the
+   * rate-limit snapshots.
+   */
+  const persistQuotaViewState = useCallback(async (patch: Partial<AppSettings>) => {
+    const current = settingsRef.current;
+    const next = { ...current, ...patch };
+    if (sameQuotaViewState(current, next)) return;
+    settingsRef.current = next;
+    setSettings(next);
+    try {
+      await api.setSettings(next);
+    } catch (err) {
+      setQuotaSelectionError(String(err));
+    }
+  }, []);
+
+  const selectQuotaTab = useCallback(
+    (provider: RateLimitProvider) => {
+      void persistQuotaViewState({ quotaSelectedTabId: provider });
+    },
+    [persistQuotaViewState],
+  );
+
+  const moveQuotaProduct = useCallback(
+    (provider: RateLimitProvider, target: RateLimitProvider | null) => {
+      const order = quotaTabOrderValue;
+      void persistQuotaViewState({
+        quotaProductOrder: computeQuotaProductOrder(
+          order,
+          settingsRef.current.selectedQuotaProductIds,
+          provider,
+          target,
+        ),
+      });
+    },
+    [persistQuotaViewState, quotaTabOrderValue],
   );
 
   const rediscoverQuotaProducts = useCallback(async () => {
@@ -429,6 +514,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     syncState,
     rateLimits,
     quotaProducts,
+    quotaTabOrder: quotaTabOrderValue,
     zCodeCredentialStatus,
     isRefreshingRateLimits,
     quotaSelectionError,
@@ -438,6 +524,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     triggerSync,
     refreshRateLimits,
     setQuotaProductSelected,
+    selectQuotaTab,
+    moveQuotaProduct,
     rediscoverQuotaProducts,
   };
 

@@ -135,6 +135,7 @@ export function quotaEmptyStateText(
   snapshot: ProviderRateLimit,
   isDetected: boolean,
   isRefreshing = false,
+  providerName?: string,
 ): string {
   if (isRefreshing) return "正在读取订阅配额…";
   switch (snapshot.emptyReason) {
@@ -142,7 +143,98 @@ export function quotaEmptyStateText(
       return "本期订阅配额已用满 · 等待额度重置";
     case "noWindow":
       return "当前没有生效的额度窗口";
+    case "notEntitled":
+      // The account answered; it simply has no subscription. Name the product
+      // so the line is actionable instead of looking like a broken read.
+      return `未订阅 ${providerName ?? snapshot.provider}`;
+    case "sessionWithoutPlanLimits":
+      return "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）";
     default:
       return isDetected ? "暂未读取到订阅配额数据" : "未检测到本机安装或登录";
   }
+}
+
+/**
+ * Tab strip order: products whose monitoring is on first, then the rest — each
+ * group in the user's persisted order. Mirrors `AppState.quotaTabOrder` on
+ * macOS: an unknown id in the stored order is dropped, a catalog product the
+ * stored order does not mention is appended, and turning a product off moves
+ * its tab to the grey group instead of removing it.
+ */
+export function quotaTabOrder(
+  catalog: RateLimitProvider[],
+  enabled: RateLimitProvider[],
+  storedOrder: RateLimitProvider[],
+): RateLimitProvider[] {
+  const known = new Set(catalog);
+  const ordered = [
+    ...storedOrder.filter((provider) => known.has(provider)),
+    ...catalog.filter((provider) => !storedOrder.includes(provider)),
+  ];
+  return [
+    ...ordered.filter((provider) => enabled.includes(provider)),
+    ...ordered.filter((provider) => !enabled.includes(provider)),
+  ];
+}
+
+/**
+ * Drag-and-drop reorder, group aware exactly like macOS: dropping on a tab
+ * inserts before it, dropping past the last tab lands at the end of the
+ * dragged product's *own* group, and a cross-group drop normalizes back into
+ * that group — "enabled first" outranks the drop. The returned array is the
+ * full stored order and is already in render order.
+ */
+export function moveQuotaProduct(
+  tabOrder: RateLimitProvider[],
+  enabled: RateLimitProvider[],
+  provider: RateLimitProvider,
+  target: RateLimitProvider | null,
+): RateLimitProvider[] {
+  if (provider === target) return tabOrder;
+  const order = [...tabOrder];
+  const from = order.indexOf(provider);
+  if (from < 0) return tabOrder;
+  order.splice(from, 1);
+
+  let destination: number;
+  if (target != null) {
+    const to = order.indexOf(target);
+    if (to < 0) return tabOrder;
+    destination = to;
+  } else {
+    // "Past the last tab" means the end of the dragged product's own group:
+    // the slot right after the group's last member. Looking for the *first*
+    // member of the other group instead would insert a grey product at the
+    // start of the grey group, which is the opposite of dropping it last.
+    const isEnabled = enabled.includes(provider);
+    const lastSameGroup = order.reduce(
+      (found, item, index) => (enabled.includes(item) === isEnabled ? index : found),
+      -1,
+    );
+    destination = lastSameGroup < 0 ? order.length : lastSameGroup + 1;
+  }
+  order.splice(destination, 0, provider);
+  // Normalize into render order so the stored array always reproduces the strip.
+  return [
+    ...order.filter((item) => enabled.includes(item)),
+    ...order.filter((item) => !enabled.includes(item)),
+  ];
+}
+
+/**
+ * "Enabled, but not producing quota": the amber dot on a tab. A refresh in
+ * flight is not a problem (the card shows its spinner), a disabled product has
+ * a grey tab instead, and a product with no snapshot yet says nothing.
+ * Mirrors `AppState.quotaTabShowsWarning` on macOS.
+ */
+export function quotaTabShowsWarning(
+  provider: RateLimitProvider,
+  enabled: RateLimitProvider[],
+  snapshot: ProviderRateLimit | undefined,
+  isRefreshing: boolean,
+): boolean {
+  if (isRefreshing) return false;
+  if (!enabled.includes(provider)) return false;
+  if (!snapshot) return false;
+  return snapshot.status.kind !== "ok";
 }
