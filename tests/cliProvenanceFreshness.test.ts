@@ -157,6 +157,13 @@ function startRegistry(): Promise<void> {
  */
 function runVerifier(script: string, cwd: string): Promise<{ status: number | null; output: string }> {
   return new Promise((settle) => {
+    // The pin has to travel over the wire for "served exactly once" to mean
+    // anything, and a warm npm cache serves it without a request: the drift job
+    // runs a real-registry `--rebuild-verify` first, and on Windows that entry
+    // satisfied this child too, so the served-tarball count stayed 0 while the
+    // verifier itself was correct. One throwaway cache per child keeps the check
+    // deterministic on every OS.
+    const cacheDir = mkdtempSync(join(tmpdir(), "vibe-cli-npm-cache-"));
     const child = spawn(process.execPath, [script, "--rebuild-verify"], {
       cwd,
       env: {
@@ -165,6 +172,7 @@ function runVerifier(script: string, cwd: string): Promise<{ status: number | nu
         // npm resolves the exact pin *and* `@latest` against this, so a verifier
         // that consults the channel really does receive the newer release.
         npm_config_registry: origin,
+        npm_config_cache: cacheDir,
         // No project or user npmrc may redirect the request elsewhere.
         NPM_CONFIG_USERCONFIG: join(cwd, "npmrc-that-does-not-exist"),
       },
@@ -174,7 +182,10 @@ function runVerifier(script: string, cwd: string): Promise<{ status: number | nu
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => { output += chunk; });
     child.stderr.on("data", (chunk: string) => { output += chunk; });
-    child.on("close", (status) => settle({ status, output }));
+    child.on("close", (status) => {
+      rmSync(cacheDir, { recursive: true, force: true });
+      settle({ status, output });
+    });
   });
 }
 
